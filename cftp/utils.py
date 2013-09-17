@@ -17,7 +17,7 @@ def cf_listing(ls_list, delimiter, long_listing=False, human=False, header=False
     if len(ls_list) > 0:
         human_fields=['bytes', 'total_bytes']
         temp_list = [] # create our temp list of lists
-        for obj in ls_list:       
+        for obj in ls_list:
             if type(obj) == dict:
                 if long_listing:
                     ls_vars_list = ['count', 'bytes', 'name']
@@ -55,7 +55,9 @@ def cf_listing(ls_list, delimiter, long_listing=False, human=False, header=False
         out_table.align = "l"
         for row in temp_list:
             out_table.add_row(row)
-        print out_table
+        return out_table
+    else:
+        return ""
 
 def cf_normpath(delimiter, path):
     """

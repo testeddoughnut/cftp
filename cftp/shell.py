@@ -7,21 +7,30 @@ import sys
 import pyrax
 import utils
 import exceptions
-from prettytable import PrettyTable
 
 class Shell(Cmd):
     """ Initialize and run the psuedo command prompt to process arguments"""
 
-    def __init__(self, username, api_key, region, snet=False, delimiter="/"):
+    def __init__(self, username, api_key, region=None, delimiter="/"):
         """ Initalize some basic global variables"""
         Cmd.__init__(self)
-        self.cftp = Cftp()
-        self.cftp.authenticate(username, api_key, region)
-        self.username = username
+        self.cftp = Cftp(delimiter=delimiter)
+        if self.cftp.authenticate(username, api_key):
+            self.username = username
+            if region:
+                self.cftp.change_region(region)
+        else:
+            print "Unable to connect to Cloud Files! Exiting."
+            sys.exit()
 
     def update_prompt(self):
-        self.prompt = self.prompt = self.username + "@" + \
-            self.current_loc["region"] + ":" + self.parsed_loc + "> "
+        self.prompt = self.username
+        if self.current_loc["region"]:
+            self.prompt += "@" + self.current_loc["region"] 
+            if self.current_loc["snet"]:
+                self.prompt += "(snet)"
+            self.prompt += ":" + self.parsed_loc
+        self.prompt += "> "
 
     def update_loc(self):
         self.current_loc = self.cftp.get_current_loc()
@@ -48,40 +57,79 @@ class Shell(Cmd):
         self.update_prompt()
         return stop
 
-    def do_change_prefix(self, new_prefix=""):
-        self.cftp.change_prefix(new_prefix)
+    @options([make_option('-s',
+            '--snet',
+            action="store_true",
+            help="Connect over ServiceNet (only available if you're " + \
+                "connecting from a datacenter in the given region).")
+        ])
+    def do_chreg(self, new_region=None, opts=None):
+        """Change the current region to the specified Cloud Files region or none
+        if no new region is provided. This will reset the container and prefix
+        in either case.
+        """
+        new_region = new_region.upper()
+        if self.cftp.change_region(new_region, snet=opts.snet):
+            if new_region:
+                print "Changed region to", new_region
+            else:
+                print "Backed out of region", self.current_loc["region"]
+        else:
+            print "Unable to access region " + new_region + ". Perhaps " + \
+                "check your ServiceNet settings?"
 
-    def do_change_region(self, region):
-        self.cftp.change_region(region)
-
-    def do_change_container(self, new_container):
+    def do_chcont(self, new_container=None):
+        """Change the container to the specified container or none if no new
+        container is provided. This will reset the prefix in either case.
+        """
+        if not self.current_loc["region"]:
+            print "You must connect to a region first (see change_region)"
+            return
         if self.cftp.change_container(new_container):
             print "Changed container to", new_container
         else:
-            print "Container", new_container, "does not exist. You must create it before changing to it."
+            print "Container", new_container, "does not exist. You must " + \
+                "create it before changing to it."
+
+    def do_chpre(self, new_prefix=None):
+        """Change the current prefix to the specified prefix or none if no new
+        prefix is provided.
+        """
+        if not self.current_loc["region"]:
+            print "You must connect to a region first (see change_region)"
+            return
+        if not self.current_loc["container"]:
+            print "You must be in a container first (see change_container)"
+            return
+        self.cftp.change_prefix(new_prefix)
 
     def do_get(self, args=''):
-        """
-        Fetch the given file.
+        """Fetch the given file from Cloud Files.
         """
         if args == '': args = self.current_dir
         ls_container, ls_prefix = utils.cf_parse_path(self.delimiter,
             self.current_dir, args)
 
     def do_cd(self, new_location=None):
-        """Change the working psudo-directory in Cloud Files."""
+        """Change the working container or psudo-directory in Cloud Files.
+        The first deliminated item is assumed to be the container.
+        """
+        if not self.current_loc["region"]:
+            print "You must connect to a region first (see change_region)"
+            return
         if not new_location:
             self.cftp.clear_container()
-            self.update_loc()
         else:
             new_container, new_prefix = utils.cf_parse_path(self.delimiter,
                 self.parsed_loc, new_location)
             if self.cftp.change_container(new_container):
                 self.cftp.change_prefix(new_prefix)
-                self.update_loc()
             else:
-                print "Container", new_container, "does not exist. You must create it before changing to it."
+                print "Container", new_container, "does not exist. You " + \
+                    "must create it before changing to it."
 
+    def do_lsreg(self, args=None):
+        print "\n".join(self.cftp.list_regions())
 
     @options([make_option('-l',
             '--long',
@@ -96,60 +144,17 @@ class Shell(Cmd):
             action="store_true",
             help="with -l, print the header of the table"),
         ])
-    def do_list(self, args='', opts=None):
+    def do_ls(self, args=None, opts=None):
         """
         Perform a listing of the current location or a given location
         """
-        if args == '': args = self.current_dir
-        ls_container, ls_prefix = utils.cf_parse_path(self.delimiter,
-            self.current_dir, args)
-
-        if not ls_container:
-            utils.cf_listing(self.cf.list_containers_info(),
-                    self.delimiter,
-                    long_listing=opts.long,
-                    human=opts.human,
-                    header=opts.header)
-        elif ls_container in self.cf.list_containers():
-            if len(ls_prefix) > 0:
-                ls_prefix = self.delimiter.join(ls_prefix)
-                if args[-1] == self.delimiter:
-                    ls_prefix += self.delimiter
-                    ls_obj = None
-                else:
-                    try:
-                        ls_obj = self.cf.get_object(ls_container, ls_prefix)
-                    except:
-                        # Need to put on the trailing slash
-                        ls_prefix += self.delimiter
-                        ls_obj = None
-                    else:
-                        # Ignore returned subdir objects
-                        if getattr(ls_obj, 'content_type') == 'pseudo/subdir':
-                            ls_prefix += self.delimiter
-                            ls_obj = None
-            else:
-                ls_prefix = None
-                ls_obj = None
-            if ls_obj:
-                objs = [ls_obj]
-            else:
-                cont_obj = self.cf.get_container(ls_container)
-                objs = cont_obj.list_subdirs(
-                    delimiter=self.delimiter,
-                    prefix=ls_prefix) + \
-                    cont_obj.get_objects(
-                    delimiter=self.delimiter,
-                    prefix=ls_prefix)
-            utils.cf_listing(objs,
-                    self.delimiter,
-                    long_listing=opts.long,
-                    human=opts.human,
-                    header=opts.header)
-        else:
-            print "Container", ls_container, "does not exist."
-
-
+        container, location = utils.cf_parse_path(self.delimiter,
+            self.parsed_loc, args)
+        if args and args[-1] == self.delimiter:
+            location += self.delimiter # put the delimiter back on the end
+        print self.cftp.get_listing(container=container, location=location,
+            long_listing=opts.long, human_readable=opts.human,
+            show_header=opts.header)
 
     def do_lls(self, args):
         """
@@ -170,11 +175,11 @@ class Shell(Cmd):
         Cmd.do_shell(self, 'cd ' + args)
 
     """ Here there be aliases """
-    do_ls = do_list
-    do_dir = do_list
+    #do_list = do_ls
+    #do_dir = do_li
     # do_cd = do_change_prefix
-    do_cc = do_change_container
-    do_cr = do_change_region
+    #do_cc = do_change_container
+    #do_cr = do_change_region
 
 
 def main():
@@ -198,12 +203,12 @@ def main():
         dest='region',
         action='store',
         type=str,
-        required=True,
+        required=False,
         help='Cloud Files region.')
     args = parser.parse_args()
     sys.argv = [sys.argv[0]] # extra args upset cmd2 for some reason.
-    
-    cftp = Shell(args.username, args.api_key, args.region.upper())
+    region = args.region.upper() if getattr(args, "region") else None
+    cftp = Shell(args.username, args.api_key, region=region)
     # cftp = Shell()
     cftp.cmdloop()
 
