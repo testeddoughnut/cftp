@@ -65,10 +65,12 @@ class Cftp(object):
             self.clear_region()
             return True
         elif new_region in self.cf and snet == self._is_region_snet(new_region):
+            self.clear_region()
             self.region = new_region
             return True
         elif self._is_valid_region(new_region) and \
                                 self._connect_to_cf_region(new_region, snet):
+            self.clear_region()
             self.region = new_region
             return True
         else:
