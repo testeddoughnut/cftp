@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
+import progressbar
 from prettytable import PrettyTable
 import pyrax
+import os
 import utils
 
 class Cftp(object):
@@ -117,18 +119,61 @@ class Cftp(object):
     def clear_prefix(self):
         self.prefix = None
 
+    def fetch_object(self, container, location, destination, overwrite=False):
+        if os.path.exists(destination) and not overwrite:
+            print "Destination file", destination, "exists. You must force" + \
+                " overwrite."
+            return False
+        try:
+            obj = self.cf[self.region].get_object(container, location)
+            obj_generator = obj.fetch(chunk_size=32)
+        except pyrax.exc.NoSuchContainer:
+            print "Container", container, "does not exist."
+            return False
+        except pyrax.exc.NoSuchObject:
+            print "Object", self.delimiter + container + self.delimiter + \
+                location, "does not exist."
+            return False
+        if _is_object_subdir(obj):
+            print "Object", self.delimiter + container + self.delimiter + \
+                location, "is a sub-directory."
+            return False
+        total_size = getattr(obj, "total_bytes")
+        bar = progressbar.ProgressBar(maxval=total_bytes, 
+            widgets=[progressbar.Bar("=", "[", "]"), " ",
+            progressbar.Percentage()])
+
+
+
+
+
     def list_regions(self):
         return self.ident.services["object_store"]["endpoints"].keys()
 
     def list_containers(self):
-        return self.cf[self.region].list_containers_info()
+        return self.cf[self.region].list_containers()
 
     def list_objects(self, container, prefix=None, delimiter=None):
         delimiter = delimiter or self.delimiter
         cont_obj = self.cf[self.region].get_container(container)
-        return cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
+        obj_list = cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
+        return [getattr(s, "name").split(delimiter)[-1] for s in obj_list]
 
     def list_subdirs(self, container, prefix=None, delimiter=None):
+        delimiter = delimiter or self.delimiter
+        cont_obj = self.cf[self.region].get_container(container)
+        obj_list = cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix)
+        return [getattr(s, "name").split(delimiter)[-1] + delimiter for s in obj_list]        
+
+    def list_containers_objs(self):
+        return self.cf[self.region].list_containers_info()
+
+    def list_objects_objs(self, container, prefix=None, delimiter=None):
+        delimiter = delimiter or self.delimiter
+        cont_obj = self.cf[self.region].get_container(container)
+        return cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
+
+    def list_subdirs_objs(self, container, prefix=None, delimiter=None):
         delimiter = delimiter or self.delimiter
         cont_obj = self.cf[self.region].get_container(container)
         return cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix)
@@ -137,7 +182,7 @@ class Cftp(object):
                     human_readable=False, show_header=False):
         out_table = ""
         if not container:
-            out_table = utils.cf_listing(self.list_containers(),
+            out_table = utils.cf_listing(self.list_containers_objs(),
                         self.delimiter,
                         long_listing=long_listing,
                         human=human_readable, 
@@ -145,8 +190,8 @@ class Cftp(object):
         elif self._is_valid_container(container):
             if not location or location == self.delimiter:
                 # Listing a container
-                obj_list = self.list_subdirs(container) + \
-                    self.list_objects(container)
+                obj_list = self.list_subdirs_objs(container) + \
+                    self.list_objects_objs(container)
                 out_table = utils.cf_listing(obj_list,
                         self.delimiter,
                         long_listing=long_listing,
@@ -162,20 +207,23 @@ class Cftp(object):
                         header=show_header)
             else:
                 # Listing a subdir
-                if location[-1] != self.delimiter:
+                if not location.endswith(self.delimiter):
                     location += self.delimiter
-                obj_list = self.list_subdirs(container, prefix=location) + \
-                    self.list_objects(container, prefix=location)
+                obj_list = self.list_subdirs_objs(container, prefix=location) + \
+                    self.list_objects_objs(container, prefix=location)
                 out_table = utils.cf_listing(obj_list,
                         self.delimiter,
                         long_listing=long_listing,
                         human=human_readable, 
                         header=show_header)
         else:
-            return "Container " + container + " does not exist."
+            return "Container", container, "does not exist."
         return out_table
 
     def _is_valid_region(self, region):
+        """Checks if the given region is advertised as available in Keystone.
+        Returns True or False.
+        """
         if region in self.ident.services["object_store"]["endpoints"].keys():
             return True
         else:
@@ -189,8 +237,8 @@ class Cftp(object):
             return False
 
     def _is_object_subdir(self, obj):
-        """Checks if given object returned from pyrax is a
-        pseudo-subdirectory.
+        """Checks if given object returned from pyrax is a pseudo-subdirectory.
+        Returns True or False.
         """
         if getattr(obj, "content_type") == "pseudo/subdir":
             return True
@@ -207,11 +255,11 @@ class Cftp(object):
         """
         if not self._is_valid_container(container):
             return False
-        if not location or location[-1] == self.delimiter:
+        if not location or location.endswith(self.delimiter):
             return False
         try:
             obj = self.cf[self.region].get_object(container, location)
-        except:
+        except pyrax.exc.NoSuchObject:
             return False
         if self._is_object_subdir(obj):
             return False

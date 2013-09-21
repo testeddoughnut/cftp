@@ -2,27 +2,27 @@
 import pyrax
 from prettytable import PrettyTable
 
-'''
+"""
 A set of utility fuctions to help with cftp
-'''
+"""
 
 def human_read(num):
-    for x in ['B','KB','MB','GB']:
+    for x in ["B","KB","MB","GB"]:
         if num < 1024.0 and num > -1024.0:
             return "%3.1f%s" % (num, x)
         num /= 1024.0
-    return "%3.1f%s" % (num, 'TB')
+    return "%3.1f%s" % (num, "TB")
 
 def cf_listing(ls_list, delimiter, long_listing=False, human=False, header=False):
     if len(ls_list) > 0:
-        human_fields=['bytes', 'total_bytes']
+        human_fields=["bytes", "total_bytes"]
         temp_list = [] # create our temp list of lists
         for obj in ls_list:
             if type(obj) == dict:
                 if long_listing:
-                    ls_vars_list = ['count', 'bytes', 'name']
+                    ls_vars_list = ["count", "bytes", "name"]
                 else:
-                    ls_vars_list = ['name']
+                    ls_vars_list = ["name"]
                 attr_list = []
                 for attr in ls_vars_list:
                     if human and obj.get(attr) and attr in human_fields:
@@ -32,20 +32,23 @@ def cf_listing(ls_list, delimiter, long_listing=False, human=False, header=False
                 temp_list.append(attr_list)
             else: # Assuming it's a StorageObject
                 if long_listing:
-                    ls_vars_list = ['etag', 'content_type', 'total_bytes', 'last_modified', 'name']
+                    ls_vars_list = ["etag", "content_type", "total_bytes",
+                        "last_modified", "name"]
                 else:
-                    ls_vars_list = ['name']
+                    ls_vars_list = ["name"]
                 attr_list = []
                 for attr in ls_vars_list:
                     if human and getattr(obj, attr) and attr in human_fields:
                         attr_list.append(human_read(getattr(obj, attr)))
-                    else:
-                        if attr == 'name' and getattr(obj, 'content_type') == "pseudo/subdir":
-                            attr_list.append(getattr(obj, attr).split(delimiter)[-1] + delimiter)
-                        elif attr == 'name':
-                            attr_list.append(getattr(obj, attr).split(delimiter)[-1])
+                    elif attr == "name":
+                        if getattr(obj, "content_type") == "pseudo/subdir":
+                            attr_list.append(getattr(obj,
+                                attr).split(delimiter)[-1] + delimiter)
                         else:
-                            attr_list.append(getattr(obj, attr))
+                            attr_list.append(getattr(obj,
+                                attr).split(delimiter)[-1])
+                    else:
+                        attr_list.append(getattr(obj, attr))
                 temp_list.append(attr_list)
         out_table = PrettyTable(ls_vars_list)
         out_table.border = False
@@ -64,17 +67,17 @@ def cf_normpath(delimiter, path):
     Normalize path.
     Much of this code is borrowed from os.posixpath, adapted for use with CF.
     """
-    dot = '.'
-    if path == '':
+    dot = "."
+    if path == "":
         return dot
     initial_delimiter = path.startswith(delimiter)
     comps = path.split(delimiter)
     new_comps = []
     for comp in comps:
-        if comp in ('', '.'):
+        if comp in ("", "."):
             continue
-        if (comp != '..' or (not initial_delimiter and not new_comps) or
-             (new_comps and new_comps[-1] == '..')):
+        if (comp != ".." or (not initial_delimiter and not new_comps) or
+             (new_comps and new_comps[-1] == "..")):
             new_comps.append(comp)
         elif new_comps:
             new_comps.pop()
@@ -96,7 +99,7 @@ def cf_join(delimiter, a, *p):
     for b in p:
         if b.startswith(delimiter):
             path = b
-        elif path == '' or path.endswith(delimiter):
+        elif path == "" or path.endswith(delimiter):
             path +=  b
         else:
             path += delimiter + b
@@ -125,7 +128,7 @@ def cf_parse_path(delimiter, path_a, path_b):
     new_comps = []
     # strip out empty fields
     for comp in comps:
-        if comp == '' or comp == '.':
+        if comp == "" or comp == ".":
             continue
         new_comps.append(comp)
     try:
