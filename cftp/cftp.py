@@ -5,6 +5,7 @@ from prettytable import PrettyTable
 import pyrax
 import os
 import utils
+import error
 
 class Cftp(object):
 
@@ -119,70 +120,56 @@ class Cftp(object):
     def clear_prefix(self):
         self.prefix = None
 
-    def fetch_object(self, container, location, destination, overwrite=False):
-        if os.path.exists(destination) and not overwrite:
-            print "Destination file", destination, "exists. You must force" + \
-                " overwrite."
-            return False
+    def fetch_object(self, container, location, chunk_size=32):
+        """Attempts to return a generator that can be itterated over for a file."""
         try:
             obj = self.cf[self.region].get_object(container, location)
-            obj_generator = obj.fetch(chunk_size=32)
         except pyrax.exc.NoSuchContainer:
-            print "Container", container, "does not exist."
-            return False
+            raise error.NoSuchContainer()
         except pyrax.exc.NoSuchObject:
-            print "Object", self.delimiter + container + self.delimiter + \
-                location, "does not exist."
-            return False
-        if _is_object_subdir(obj):
-            print "Object", self.delimiter + container + self.delimiter + \
-                location, "is a sub-directory."
-            return False
-        total_size = getattr(obj, "total_bytes")
-        bar = progressbar.ProgressBar(maxval=total_bytes, 
-            widgets=[progressbar.Bar("=", "[", "]"), " ",
-            progressbar.Percentage()])
-
-
-
-
+            raise error.NoSuchObject()
+        if self._is_object_subdir(obj):
+            raise error.ObjectIsSubDir()
+        return obj.fetch(chunk_size=chunk_size), getattr(obj, "total_bytes")
 
     def list_regions(self):
         return self.ident.services["object_store"]["endpoints"].keys()
 
-    def list_containers(self):
-        return self.cf[self.region].list_containers()
+    # def list_containers(self):
+    #     return self.cf[self.region].list_containers()
 
-    def list_objects(self, container, prefix=None, delimiter=None):
-        delimiter = delimiter or self.delimiter
+    # def list_objects(self, container, prefix=None):
+    #     cont_obj = self.cf[self.region].get_container(container)
+    #     obj_list = cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
+    #     return [getattr(s, "name").split(delimiter)[-1] for s in obj_list]
+
+    # def list_subdirs(self, container, prefix=None):
+    #     cont_obj = self.cf[self.region].get_container(container)
+    #     obj_list = cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix)
+    #     return [getattr(s, "name").split(delimiter)[-1] + delimiter for s in obj_list]        
+
+    def list_containers_objs(self, marker=None, limit=None):
+        return self.cf[self.region].list_containers_info(marker=marker,
+            limit=limit)
+
+    def list_objects_objs(self, container, prefix=None, marker=None,
+        limit=None):
         cont_obj = self.cf[self.region].get_container(container)
-        obj_list = cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
-        return [getattr(s, "name").split(delimiter)[-1] for s in obj_list]
+        return cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix,
+            marker=marker, limit=limit)
 
-    def list_subdirs(self, container, prefix=None, delimiter=None):
-        delimiter = delimiter or self.delimiter
+    def list_subdirs_objs(self, container, prefix=None, marker=None,
+        limit=None):
         cont_obj = self.cf[self.region].get_container(container)
-        obj_list = cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix)
-        return [getattr(s, "name").split(delimiter)[-1] + delimiter for s in obj_list]        
-
-    def list_containers_objs(self):
-        return self.cf[self.region].list_containers_info()
-
-    def list_objects_objs(self, container, prefix=None, delimiter=None):
-        delimiter = delimiter or self.delimiter
-        cont_obj = self.cf[self.region].get_container(container)
-        return cont_obj.get_objects(delimiter=self.delimiter, prefix=prefix)
-
-    def list_subdirs_objs(self, container, prefix=None, delimiter=None):
-        delimiter = delimiter or self.delimiter
-        cont_obj = self.cf[self.region].get_container(container)
-        return cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix)
+        return cont_obj.list_subdirs(delimiter=self.delimiter, prefix=prefix,
+            marker=marker, limit=limit)
 
     def get_listing(self, container=None, location=None, long_listing=False,
                     human_readable=False, show_header=False):
+        """Returns a prettytable listing of a container, subdir, or object."""
         out_table = ""
         if not container:
-            out_table = utils.cf_listing(self.list_containers_objs(),
+            out_table = utils.container_ls(self.list_containers_objs(),
                         self.delimiter,
                         long_listing=long_listing,
                         human=human_readable, 
@@ -192,14 +179,14 @@ class Cftp(object):
                 # Listing a container
                 obj_list = self.list_subdirs_objs(container) + \
                     self.list_objects_objs(container)
-                out_table = utils.cf_listing(obj_list,
+                out_table = utils.object_ls(obj_list,
                         self.delimiter,
                         long_listing=long_listing,
                         human=human_readable, 
                         header=show_header)
             elif self._is_valid_object(container, location):
                 # Listing a single object
-                out_table = utils.cf_listing([self.cf[self.region].get_object(
+                out_table = utils.object_ls([self.cf[self.region].get_object(
                             container, location)],
                         self.delimiter,
                         long_listing=long_listing,
@@ -211,7 +198,7 @@ class Cftp(object):
                     location += self.delimiter
                 obj_list = self.list_subdirs_objs(container, prefix=location) + \
                     self.list_objects_objs(container, prefix=location)
-                out_table = utils.cf_listing(obj_list,
+                out_table = utils.object_ls(obj_list,
                         self.delimiter,
                         long_listing=long_listing,
                         human=human_readable, 
@@ -219,6 +206,103 @@ class Cftp(object):
         else:
             return "Container", container, "does not exist."
         return out_table
+
+    def list_containers(self, long_listing=False, human=False, header=False,
+        return_list=False):
+
+        def _walk_containers(container_list):
+            temp_list = []
+            for obj in container_list:
+                attr_list = []
+                for attr in var_list:
+                    if human and obj.get(attr) and attr == "bytes":
+                        attr_list.append(human_read(obj.get(attr)))
+                    else:
+                        attr_list.append(obj.get(attr))
+                temp_list.append(attr_list)
+            return temp_list
+
+        var_list = ["count", "bytes", "name"] if long_listing else ["name"]
+        table_list = []
+        containers = self.list_containers_objs()
+        if containers:
+            table_list = _walk_containers(containers)
+            marker = containers[-1].get("name")
+            while marker != containers[-1].get("name"):
+                marker = containers[-1].get("name")
+                containers = self.list_containers_objs(marker=marker)
+                if containers:
+                    table_list.append(_walk_containers(containers))
+
+        if len(table_list) == 0:
+            return ""
+        if return_list:
+            return [s[0] for s in table_list]
+        elif long_listing:
+            return utils.ls_table(var_list, table_list, header=header)
+        else:
+            return "  ".join([s[0] for s in table_list])
+
+    def list_objects(self, container, prefix=None, obj=None, long_listing=False,
+        human=False, header=False, return_list=False):
+
+        def _walk_objects(object_list):
+            temp_list = []
+            for obj in object_list:
+                attr_list = []
+                for attr in var_list:
+                    if human and getattr(obj, attr) and attr == "total_bytes":
+                        attr_list.append(human_read(getattr(obj, attr)))
+                    elif attr == "name":
+                        if getattr(obj, "content_type") == "pseudo/subdir":
+                            attr_list.append(getattr(obj,
+                                attr).split(self.delimiter)[-1] + \
+                                self.delimiter)
+                        else:
+                            attr_list.append(getattr(obj, 
+                                attr).split(self.delimiter)[-1])
+                    else:
+                        attr_list.append(getattr(obj, attr))
+                temp_list.append(attr_list)
+            return temp_list
+
+        var_list = ["etag", "content_type", "total_bytes", "last_modified",
+                "name"] if long_listing else ["name"]
+        table_list = []
+        if obj:
+            obj_list = [self.cf[self.region].get_object(container, obj)]
+            table_list = _walk_objects(obj_list)
+        else:
+            subdirs = self.list_subdirs_objs(container, prefix=prefix)
+            if subdirs:
+                subdirs_list = _walk_objects(subdirs)
+                marker = getattr(subdirs[-1], "name")
+                while marker != getattr(subdirs[-1], "name"):
+                    marker = getattr(subdirs[-1], "name")
+                    subdirs = self.list_subdirs_objs(container, prefix=prefix,
+                        marker=marker)
+                    if subdirs:
+                        subdirs_list.append(_walk_objects(subdirs))
+                table_list += subdirs_list
+            objects = self.list_objects_objs(container, prefix=prefix)
+            if objects:
+                objects_list = _walk_objects(objects)
+                marker = getattr(objects[-1], "name")
+                while marker != getattr(objects[-1], "name"):
+                    marker = getattr(objects[-1], "name")
+                    objects = self.list_objects_objs(container, prefix=prefix,
+                        marker=marker)
+                    if objects:
+                        objects_list.append(_walk_objects(objects))
+                table_list += objects_list
+        if len(table_list) == 0:
+            return ""
+        if return_list:
+            return [s[0] for s in table_list]
+        elif long_listing:
+            return utils.ls_table(var_list, table_list, header=header)
+        else:
+            return "  ".join([s[0] for s in table_list])
 
     def _is_valid_region(self, region):
         """Checks if the given region is advertised as available in Keystone.

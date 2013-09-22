@@ -4,6 +4,7 @@ import argparse
 from cftp import Cftp
 from cmd import Cmd
 import sys
+import os
 import pyrax
 import utils
 import error
@@ -78,34 +79,40 @@ class Shell(Cmd):
         """Tab-completion for commands involving Cloud Files directory
         structure.
         """
+        if incomplete == self.delimiter: incomplete = ""
         if not self.current_loc["region"]:
             return
         container, location = utils.cf_parse_path(self.delimiter,
             self.parsed_loc, incomplete)
         if location or (container and (incomplete.endswith(self.delimiter) or 
             not incomplete)):
-            if incomplete.endswith(self.delimiter) or \
-                (location and not incomplete):
-                location += self.delimiter
             prefix, obj = utils.cf_split(self.delimiter, location)
             if prefix == self.delimiter or not prefix:
                 prefix = None
             else:
                 prefix += self.delimiter
-            objects = self.cftp.list_subdirs(container, prefix=prefix,
-                delimiter=self.delimiter) + self.cftp.list_objects(container,
-                prefix=prefix, delimiter=self.delimiter)
+
+            objects = self.cftp.list_objects(container, prefix=prefix,
+                return_list=True)
             if obj:
                 return [i for i in objects if i.startswith(obj)]
             else:
                 return objects
         else:
-            containers = self.cftp.list_containers()
+            containers = self.cftp.list_containers(return_list=True)
             if incomplete:
                 return [i + self.delimiter for i in containers if 
                 i.startswith(container)]
             else:
                 return containers
+
+    def do_exit(self, args):
+        """Exits cftp. You can also use the Ctrl-D shortcut."""
+        return True
+
+    def do_pwd(self, args):
+        """Prints current location."""
+        print self.parsed_loc
 
     def do_lsreg(self, args=None):
         """Lists available Cloud Files regions."""
@@ -113,9 +120,11 @@ class Shell(Cmd):
 
     def help_chregion(self):
         self.do_chregion("--help")
+
     def complete_chregion(self, text, line, begidx, endidx):
         regions = self.cftp.list_regions()
         return [i for i in regions if i.startswith(text.upper())]
+
     def do_chregion(self, args=None):
         """Change the current region to the specified Cloud Files region or none
         if no new region is provided. This will reset the container and prefix
@@ -174,11 +183,70 @@ class Shell(Cmd):
             return
         self.cftp.change_prefix(new_prefix)
 
+    def complete_get(self, text, line, begidx, endidx):
+        try:
+            incomplete = [s for s in line.split()[1:] if not s.startswith("-")
+                and s.endswith(text)][0]
+        except:
+            incomplete = ""
+        return self.location_completion(incomplete)
+
     def do_get(self, args):
         """Fetch the given file from Cloud Files."""
-        pass
-        # container, location = utils.cf_parse_path(self.delimiter,
-        #     args)
+        """Perform a listing of the current location or a given location."""
+        if not self.current_loc["region"]:
+            print "You must connect to a region first (see chregion)"
+            return
+        parser = CmdParse(description=self.do_ls.__doc__)
+        parser.add_argument("file",
+            action="store",
+            help="The objects to be fetched.")
+        parser.add_argument("destination",
+            action="store",
+            nargs="?",
+            help="The objects to be fetched.")
+        parser.add_argument("--force",
+            "-f",
+            action="store_true",
+            required=False,
+            help="Force things (like overwrite).")
+        try:
+            parsed_args = parser.parse_args(args.split())
+        except error.UsageError as e:
+            print e
+            return
+        except error.CatchExit:
+            return
+        get_file = parsed_args.file
+        if parsed_args.destination:
+            destination = parsed_args.destination
+        else:
+            trash, destination = utils.cf_split(self.delimiter, get_file)
+        if os.path.exists(destination) and not parsed_args.force:
+            print "Destination file", destination, "exists. You must force" + \
+                " overwrite."
+            return
+        container, location = utils.cf_parse_path(self.delimiter,
+            self.parsed_loc, get_file)
+        try:
+            obj_gen, total_size = self.cftp.fetch_object(container, location)
+        except error.NoSuchContainer:
+            print "Container", container, "does not exist."
+            return
+        except error.NoSuchObject:
+            print "Object", self.delimiter + container + self.delimiter + \
+                location, "does not exist."
+            return
+        except error.ObjectIsSubDir:
+            print "Object", self.delimiter + container + self.delimiter + \
+                location, "is a sub-directory."
+            return
+        downloaded = 0
+        with open(destination, 'wb') as f:
+            for chunk in obj_gen:
+                f.write(chunk)
+                f.flush()
+                downloaded += 32
 
     def complete_cd(self, text, line, begidx, endidx):
         try:
@@ -187,6 +255,7 @@ class Shell(Cmd):
         except:
             incomplete = ""
         return self.location_completion(incomplete)
+
     def do_cd(self, new_location=None):
         """Change the working container or psudo-directory in Cloud Files.
         The first deliminated item is assumed to be the container.
@@ -207,6 +276,7 @@ class Shell(Cmd):
 
     def help_ls(self):
         self.do_ls("--help")
+
     def complete_ls(self, text, line, begidx, endidx):
         try:
             incomplete = [s for s in line.split()[1:] if not s.startswith("-")
@@ -214,6 +284,7 @@ class Shell(Cmd):
         except:
             incomplete = ""
         return self.location_completion(incomplete)
+
     def do_ls(self, args=""):
         """Perform a listing of the current location or a given location."""
         if not self.current_loc["region"]:
@@ -257,28 +328,21 @@ class Shell(Cmd):
         ls_location = parsed_args.location or ""
         container, location = utils.cf_parse_path(self.delimiter,
             self.parsed_loc, ls_location)
-        if (ls_location and ls_location.endswith(self.delimiter)) or \
-            (not ls_location and self.parsed_loc.endswith(self.delimiter)):
-            location += self.delimiter # put the delimiter back on the end
         print self.cftp.get_listing(container=container, location=location,
             long_listing=parsed_args.long, human_readable=parsed_args.human,
             show_header=parsed_args.header)
 
     def do_lls(self, args):
-        """Runs local ls locally."""
-        Cmd.do_shell(self, "ls -1 " + args)
+        """Runs ls locally."""
+        os.system("ls " + args)
 
     def do_lpwd(self, args):
-        """Runs local pwd locally."""
-        Cmd.do_shell(self, "pwd " + args)
+        """Runs pwd locally."""
+        os.system("pwd")
 
     def do_lcd(self, args):
-        """Runs local cd locally."""
-        Cmd.do_shell(self, "cd " + args)
-
-    def do_exit(self, args):
-        """Exits cftp. You can also use the Ctrl-D shortcut."""
-        return True
+        """Runs cd locally."""
+        os.system("cd " + args)
 
     """ Here there be aliases """
     do_EOF = do_exit

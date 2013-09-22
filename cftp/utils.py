@@ -50,17 +50,94 @@ def cf_listing(ls_list, delimiter, long_listing=False, human=False, header=False
                     else:
                         attr_list.append(getattr(obj, attr))
                 temp_list.append(attr_list)
-        out_table = PrettyTable(ls_vars_list)
-        out_table.border = False
-        out_table.header = True if header else False
-        out_table.left_padding_width = 0
-        out_table.right_padding_width = 2
-        out_table.align = "l"
-        for row in temp_list:
-            out_table.add_row(row)
-        return out_table
+        if long_listing:
+            out_table = PrettyTable(ls_vars_list)
+            out_table.border = False
+            out_table.header = True if header else False
+            out_table.left_padding_width = 0
+            out_table.right_padding_width = 2
+            out_table.align = "l"
+            for row in temp_list:
+                out_table.add_row(row)
+            return out_table
+        else:
+            return "  ".join([s[0] for s in temp_list])
     else:
         return ""
+
+def container_ls(objs, delimiter, long_listing=False, human=False,
+    header=False):
+    if len(objs) > 0:
+        var_list = ["count", "bytes", "name"] if long_listing else ["name"]
+        temp_list = [] # create our temp list of lists
+        for obj in objs:
+            attr_list = []
+            for attr in var_list:
+                if human and obj.get(attr) and attr == "bytes":
+                    attr_list.append(human_read(obj.get(attr)))
+                else:
+                    attr_list.append(obj.get(attr))
+            temp_list.append(attr_list)
+        if long_listing:
+            out_table = PrettyTable(var_list)
+            out_table.border = False
+            out_table.header = True if header else False
+            out_table.left_padding_width = 0
+            out_table.right_padding_width = 2
+            out_table.align = "l"
+            for row in temp_list:
+                out_table.add_row(row)
+            return out_table
+        else:
+            return "  ".join([s[0] for s in temp_list])
+    else:
+        return ""
+
+def object_ls(objs, delimiter, long_listing=False, human=False, header=False):
+    if len(objs) > 0:
+        var_list = ["etag", "content_type", "total_bytes", "last_modified",
+            "name"] if long_listing else ["name"]
+        temp_list = []
+        for obj in objs:
+            attr_list = []
+            for attr in var_list:
+                if human and getattr(obj, attr) and attr == "total_bytes":
+                    attr_list.append(human_read(getattr(obj, attr)))
+                elif attr == "name":
+                    if getattr(obj, "content_type") == "pseudo/subdir":
+                        attr_list.append(getattr(obj,
+                            attr).split(delimiter)[-1] + delimiter)
+                    else:
+                        attr_list.append(getattr(obj, 
+                            attr).split(delimiter)[-1])
+                else:
+                    attr_list.append(getattr(obj, attr))
+            temp_list.append(attr_list)
+        if long_listing:
+            out_table = PrettyTable(var_list)
+            out_table.border = False
+            out_table.header = True if header else False
+            out_table.left_padding_width = 0
+            out_table.right_padding_width = 2
+            out_table.align = "l"
+            for row in temp_list:
+                out_table.add_row(row)
+            return out_table
+        else:
+            return "  ".join([s[0] for s in temp_list])
+    else:
+        return ""
+
+def ls_table(var_list, table_list, header=False):
+    out_table = PrettyTable(var_list)
+    out_table.border = False
+    out_table.header = True if header else False
+    out_table.left_padding_width = 0
+    out_table.right_padding_width = 2
+    out_table.align = "l"
+    for row in table_list:
+        out_table.add_row(row)
+    return out_table
 
 def cf_normpath(delimiter, path):
     """
@@ -121,7 +198,9 @@ def cf_parse_path(delimiter, path_a, path_b):
     """Takes two paths and a delimiter, joins them, then returns a tuple
     containing a string of the resulting container and prefix. Will return None
     for either if they're empty.
+    This assumes that path_b is the incomplete path.
     """
+    end_delimiter = path_b.endswith(delimiter)
     joined_path = cf_join(delimiter, path_a, path_b)
     new_path = cf_normpath(delimiter, joined_path)
     comps = new_path.split(delimiter)
@@ -139,5 +218,7 @@ def cf_parse_path(delimiter, path_a, path_b):
         prefix = delimiter.join(new_comps[1:])
     except IndexError:
         prefix = None
+    if prefix and end_delimiter:
+        prefix += delimiter
     # first item is container, second item is list of container.
     return container, prefix
